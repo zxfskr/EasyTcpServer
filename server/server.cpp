@@ -1,5 +1,6 @@
 #include "EasyTcpServer.hpp"
 
+
 using namespace std;
 
 void sighandler(int sig)
@@ -8,8 +9,6 @@ void sighandler(int sig)
               << sig
               << std::endl;
 }
-
-vector<int> g_sockets;
 
 int main(int argc, char **argv)
 {

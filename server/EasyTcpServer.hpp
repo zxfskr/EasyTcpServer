@@ -19,20 +19,66 @@
 #include <signal.h>
 
 #include "MessageHeader.hpp"
+#include "CellTimestamp.hpp"
 
 using namespace std;
+
+class ClientSocket
+{
+private:
+    /* data */
+    int _sockfd;
+
+#define RECV_BUFF_SIZE 10240
+    char _szMsgBuf[RECV_BUFF_SIZE * 10] = {};
+    int _lastPos = 0;
+
+public:
+    ClientSocket(int cs)
+    {
+        _sockfd = cs;
+        memset(_szMsgBuf, 0, RECV_BUFF_SIZE * 10);
+        _lastPos = 0;
+    }
+    ~ClientSocket()
+    {
+    }
+
+    int sockfd()
+    {
+        return _sockfd;
+    }
+
+    char *msgBuf()
+    {
+        return _szMsgBuf;
+    }
+
+    int getLast()
+    {
+        return _lastPos;
+    }
+
+    void setLastPos(int n)
+    {
+        _lastPos = n;
+    }
+};
 
 class EasyTcpServer
 {
 private:
     /* data */
     int _sock;
-    vector<int> g_sockets;
+    vector<ClientSocket *> _clients;
+    CellTimestamp _tTime;
+    int _recvCount;
 
 public:
     EasyTcpServer(/* args */)
     {
         _sock = -1;
+        _recvCount = 0;
     }
 
     ~EasyTcpServer()
@@ -115,7 +161,7 @@ public:
 
     int Accept()
     {
-        printf("新客户端接入请求\n");
+        // printf("新客户端接入请求\n");
         int accept_fd;
         // FD_CLR(_sock, &rfds);
         struct sockaddr_in remoteaddr;
@@ -124,16 +170,20 @@ public:
         if (-1 == accept_fd)
         {
             printf("客户端链接失败\n");
+            perror("accept:  ");
+            return -1;
         }
 
-        for (unsigned i = 0; i < g_sockets.size(); i++)
-        {
-            NewUserJoin nuj;
-            nuj.socket = g_sockets[i];
-            send(g_sockets[i], (const void *)&nuj, sizeof(nuj), 0);
-        }
-        printf("链接开始， 群发新用户加入消息： 客户端 ip %s， port %d\n", inet_ntoa(remoteaddr.sin_addr), remoteaddr.sin_port);
-        g_sockets.push_back(accept_fd);
+        // for (unsigned i = 0; i < _clients.size(); i++)
+        // {
+        //     NewUserJoin nuj;
+        //     nuj.socket = _clients[i]->sockfd();
+        //     send(nuj.socket, (const void *)&nuj, sizeof(nuj), 0);
+        // }
+        // printf("链接开始， 群发新用户加入消息： 客户端 ip %s， port %d\n", inet_ntoa(remoteaddr.sin_addr), remoteaddr.sin_port);
+        printf("链接开始<socket %d>, \n", accept_fd);
+        _clients.push_back(new ClientSocket(accept_fd));
+
         return 0;
     }
 
@@ -144,7 +194,7 @@ public:
             close(_sock);
         }
     }
-
+    int count = 0;
     int OnRun()
     {
         if (IsRun())
@@ -163,15 +213,17 @@ public:
             FD_SET(_sock, &wfds);
             FD_SET(_sock, &efds);
 
-            for (size_t n = 0; n < g_sockets.size(); n++)
+            for (size_t n = 0; n < _clients.size(); n++)
             {
-                max_fd = max_fd > (g_sockets[n] + 1) ? max_fd : (g_sockets[n] + 1);
-                FD_SET(g_sockets[n], &rfds);
+                max_fd = max_fd > (_clients[n]->sockfd() + 1) ? max_fd : (_clients[n]->sockfd() + 1);
+                FD_SET(_clients[n]->sockfd(), &rfds);
             }
 
             timeval t = {1, 0};
 
             ret = select(max_fd, &rfds, &wfds, &efds, &t);
+
+            // printf("select ret %d count %d\n", ret, count++);
             if (ret < 0)
             {
                 printf("select error, \n");
@@ -179,7 +231,7 @@ public:
             }
             else if (ret == 0)
             {
-                printf("空闲时间处理业务.\n");
+                // printf("空闲时间处理业务.\n");
             }
             else
             {
@@ -187,66 +239,143 @@ public:
                 {
                     Accept();
                 }
-
-                vector<int>::iterator it;
-
-                for (it = g_sockets.begin(); it != g_sockets.end();)
+                else
                 {
-                    if (!FD_ISSET(*it, &rfds))
+                    /* code */
+                    vector<ClientSocket *>::iterator it;
+
+                    for (it = _clients.begin(); it != _clients.end();)
                     {
-                        it++;
-                    }
-                    else
-                    {
-                        ret = RecvData(*it);
-                        if (-1 == ret)
+
+                        int tmp_fd = (*it)->sockfd();
+                        // printf("< 发现事件的scoket=%d> \n", tmp_fd);
+                        if (!FD_ISSET(tmp_fd, &rfds))
                         {
-                            close(*it);
-                            struct sockaddr_in remoteaddr;
-                            socklen_t address_len = sizeof(struct sockaddr);
-                            getsockname(*it, (sockaddr *)&remoteaddr, &address_len);
-                            printf("链接断开： 客户端 ip %s， port %d\n", inet_ntoa(remoteaddr.sin_addr), remoteaddr.sin_port);
-                            it = g_sockets.erase(it);
+                            it++;
                         }
                         else
                         {
-                            it++;
+                            ret = RecvData(*it);
+                            if (-1 == ret)
+                            {
+                                // struct sockaddr_in remoteaddr;
+                                // socklen_t address_len = sizeof(struct sockaddr);
+                                // getsockname(tmp_fd, (sockaddr *)&remoteaddr, &address_len);
+                                printf("链接断开： <socket=> %d\n", tmp_fd);
+
+                                if (tmp_fd >= 0)
+                                    close(tmp_fd);
+                                // printf("*it %p\n", *it);
+                                delete (*it);
+
+                                // cout<<it<<endl;
+                                // if (it != NULL)
+                                // {
+                                // printf("it %p\n", it);
+                                it = _clients.erase(it);
+                                printf("清理已断开socket 完成\n");
+                                // }
+                            }
+                            else
+                            {
+                                it++;
+                            }
                         }
                     }
                 }
             }
         }
-        return false;
+        return 0;
     }
 
-    int RecvData(int cs)
+    // #define RECV_BUFF_SIZE 10240
+    char _szRecv[RECV_BUFF_SIZE] = {};
+    // char _szMsgBuf[RECV_BUFF_SIZE * 10] = {};
+    // int _lastPos = 0;
+    int RecvData(ClientSocket *pClient)
     {
-        struct DataHeader *dh;
-        size_t dhLen = sizeof(DataHeader);
-        char buf[1024];
+        char errHeader[10] = "";
 
-        int nlen = recv(cs, (char *)&buf, dhLen, 0);
+        sprintf(errHeader, "<socket=%d>", pClient->sockfd());
+
+        int nlen = recv(pClient->sockfd(), (char *)&_szRecv, RECV_BUFF_SIZE, 0);
+        // printf("recv len %d\n", nlen);
         if (nlen == 0)
         {
             Close();
+
+            bzero(pClient->msgBuf(), RECV_BUFF_SIZE * 10);
+            pClient->setLastPos(0);
             printf("链接断开\n");
             return -1;
         }
-        dh = (DataHeader *)buf;
 
-        recv(cs, (char *)&buf + dhLen, dh->dataLength - dhLen, 0);
-        OnNetMsg(dh, cs);
+        if (-1 == nlen)
+        {
+            // printf("errno = %d\n", errno);
+            if (errno == EINTR)
+            {
+                perror(errHeader);
+                return 0;
+            }
+            if (errno == EAGAIN)
+            {
+                perror(errHeader);
+                return 0;
+            }
+
+            else
+            {
+                perror(errHeader);
+                return -1;
+            }
+        }
+
+        //将
+        memcpy(pClient->msgBuf() + pClient->getLast(), _szRecv, nlen);
+        //消息缓冲区
+        pClient->setLastPos(pClient->getLast() + nlen);
+        // _lastPos += nlen;
+        // printf("接受数据的长度;%d data_header len: %d\n", pClient->getLast(), sizeof(DataHeader));
+        while (pClient->getLast() >= sizeof(DataHeader))
+        {
+            struct DataHeader *dh = (DataHeader *)pClient->msgBuf();
+            // printf("dh->datalength : %d\n", dh->dataLength);
+            if (pClient->getLast() >= dh->dataLength)
+            {
+                OnNetMsg(dh, pClient->sockfd());
+                // 记录处理消息长度
+                int nSize = dh->dataLength;
+                memcpy(pClient->msgBuf(), pClient->msgBuf() + nSize, pClient->getLast() - nSize);
+                //滑动窗口
+                pClient->setLastPos(pClient->getLast() - nSize);
+            }
+            else
+            {
+                //剩余数据长度不够一条完整的消息
+                break;
+            }
+        }
+
         return 0;
     }
 
     virtual int OnNetMsg(DataHeader *dh, int cs)
     {
+        _recvCount++;
+        auto t1 = _tTime.getElapsedSecond();
+        if (t1 >= 1.0){
+            printf("time <%lf>,recvcount <%d>\n", t1, _recvCount);
+            _tTime.update();
+            _recvCount = 0;
+        }
+
         switch (dh->cmd)
         {
         case CMD_LOGIN:
         {
             Login *login = (Login *)dh;
-            printf("login name :%s pwd: %s\n", login->userName, login->password);
+            // printf("login name :%s pwd: %s\n", login->userName, login->password);
 
             LoginResult lir;
             send(cs, (const void *)&lir, sizeof(lir), 0);
@@ -276,7 +405,7 @@ public:
         return 0;
     }
 
-    int Send(DataHeader *dh, int cs)
+    int SendData(DataHeader *dh, int cs)
     {
         if (IsRun() && dh)
             return send(cs, (const void *)dh, dh->dataLength, 0);
