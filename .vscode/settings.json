@@ -2,6 +2,10 @@
     "files.associations": {
         "functional": "cpp",
         "vector": "cpp",
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "iostream": "cpp",
+        "mutex": "cpp",
+        "atomic": "cpp",
+        "ios": "cpp"
     }
 }
